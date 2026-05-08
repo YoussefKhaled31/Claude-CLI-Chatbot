@@ -1,4 +1,3 @@
-from curses import error
 import json
 from pathlib import Path
 
@@ -20,29 +19,35 @@ MEMORY_FILE = Path("conversation.json")
 
 client = anthropic.Anthropic()
 
+
 def load_memory():
     if not MEMORY_FILE.exists():
-        return[]
+        return []
+
     try:
-        with MEMORY_FILE.open("r", enconding="utf-8") as file:
+        with MEMORY_FILE.open("r", encoding="utf-8") as file:
             messages = json.load(file)
+
         if isinstance(messages, list):
             return messages[-MEMORY_LIMIT:]
-        
-        return[]
-    
+
+        return []
+
     except json.JSONDecodeError:
-        console.print(Panel("conversation.json is broken. Starting with empty memory.", border_style="blue"))
-        return[]
-    
+        console.print(Panel("conversation.json is broken. Starting with empty memory.", border_style="red"))
+        return []
+
+
 def save_memory(messages):
     with MEMORY_FILE.open("w", encoding="utf-8") as file:
         json.dump(messages[-MEMORY_LIMIT:], file, indent=2)
+
 
 def show_help():
     table = Table(title="Claude CLI Commands")
     table.add_column("Command", style="cyan")
     table.add_column("What it does")
+
     table.add_row("/help", "Show available commands.")
     table.add_row("/history", "Show the current conversation memory.")
     table.add_row("/save", "Save the current conversation to conversation.json.")
@@ -52,11 +57,12 @@ def show_help():
 
     console.print(table)
 
+
 def show_history(messages):
     if not messages:
         console.print(Panel("No conversation history yet.", border_style="yellow"))
         return
-    
+
     table = Table(title="Conversation History")
     table.add_column("#")
     table.add_column("Role")
@@ -67,35 +73,37 @@ def show_history(messages):
 
         if len(content) > 120:
             content = content[:120] + "..."
-        
+
         table.add_row(str(index), message["role"], content)
 
     console.print(table)
 
+
 def ask_multiline(title):
-    console.print(Panel("Paste your text below. Type END on its own line when finished.",
-    title=title, border_style="cyan"))
-    
+    console.print(Panel("Paste your text below. Type END on its own line when finished.", title=title, border_style="cyan"))
+
     lines = []
 
     while True:
         line = input()
-        if line.strip() == 'END':
+
+        if line.strip() == "END":
             break
+
         lines.append(line)
 
     return "\n".join(lines).strip()
+
 
 def evaluate_answer():
     user_instruction = ask_multiline("Original User Instruction")
     claude_answer = ask_multiline("Claude Answer To Evaluate")
 
     if not user_instruction or not claude_answer:
-        console.print(Panel("Both the instruction and answer are required.",
-        border_style="red"))
+        console.print(Panel("Both the instruction and answer are required.", border_style="red"))
         return
 
-    evlaution_prompt = f"""
+    evaluation_prompt = f"""
 You are a strict AI output evaluator preparing someone for professional Claude-output review work.
 
 Evaluate the answer harshly but fairly.
@@ -108,7 +116,7 @@ Original user instruction:
 Claude answer:
 <answer>
 {claude_answer}
-</answer>   
+</answer>
 
 Return the evaluation in this structure:
 
@@ -141,10 +149,10 @@ Be direct. Say whether this answer would pass a strict evaluation.
 ## Suggested Improved Answer
 Rewrite the answer better.
 """
-    
 
     try:
         console.print(Panel("Claude is evaluating the answer...", border_style="yellow"))
+
         response = client.messages.create(
             model=MODEL,
             max_tokens=1000,
@@ -156,18 +164,133 @@ Rewrite the answer better.
                 }
             ],
         )
+
         report = response.content[0].text
         console.print(Panel(Markdown(report), title="Strict Evaluation Report", border_style="green"))
+
     except anthropic.AuthenticationError:
         console.print(Panel("Authentication failed. Check your ANTHROPIC_API_KEY in .env.", border_style="red"))
+
     except anthropic.RateLimitError:
         console.print(Panel("Rate limit reached. Try again later.", border_style="red"))
+
     except anthropic.NotFoundError:
         console.print(Panel("Model not found. Check the MODEL value.", border_style="red"))
+
     except anthropic.APIConnectionError:
         console.print(Panel("Connection error. Check your internet.", border_style="red"))
+
     except anthropic.APIStatusError as error:
         console.print(Panel(f"API error: {error.status_code}", border_style="red"))
+
     except Exception as error:
         console.print(Panel(f"Unexpected error: {error}", border_style="red"))
+
+
+def chat_with_claude(messages, user_text):
+    messages.append(
+        {
+            "role": "user",
+            "content": user_text,
+        }
+    )
+
+    messages = messages[-MEMORY_LIMIT:]
+
+    try:
+        console.print(Panel("Claude is responding...", border_style="yellow"))
+
+        assistant_answer = ""
+
+        with client.messages.stream(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            system="You are a clear, practical AI Engineering tutor. Explain things simply but accurately.",
+            messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                assistant_answer += text
+                console.print(text, end="")
+
+        console.print()
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": assistant_answer,
+            }
+        )
+
+        messages = messages[-MEMORY_LIMIT:]
+        save_memory(messages)
+
+        return messages
+
+    except anthropic.AuthenticationError:
+        console.print(Panel("Authentication failed. Check your ANTHROPIC_API_KEY in .env.", border_style="red"))
+
+    except anthropic.RateLimitError:
+        console.print(Panel("Rate limit reached. Try again later.", border_style="red"))
+
+    except anthropic.NotFoundError:
+        console.print(Panel("Model not found. Check the MODEL value.", border_style="red"))
+
+    except anthropic.APIConnectionError:
+        console.print(Panel("Connection error. Check your internet.", border_style="red"))
+
+    except anthropic.APIStatusError as error:
+        console.print(Panel(f"API error: {error.status_code}", border_style="red"))
+
+    except Exception as error:
+        console.print(Panel(f"Unexpected error: {error}", border_style="red"))
+
+    return messages
+
+
+def main():
+    messages = load_memory()
+
+    console.print(
+        Panel.fit(
+            "Claude CLI Chatbot\nType /help to see commands.",
+            title="Anthropic API Practice",
+            border_style="green",
+        )
+    )
+
+    while True:
+        user_text = console.input("\n[bold cyan]You:[/bold cyan] ").strip()
+
+        if not user_text:
+            continue
+
+        if user_text == "/help":
+            show_help()
+
+        elif user_text == "/history":
+            show_history(messages)
+
+        elif user_text == "/save":
+            save_memory(messages)
+            console.print(Panel("Conversation saved.", border_style="green"))
+
+        elif user_text == "/reset":
+            messages = []
+            save_memory(messages)
+            console.print(Panel("Conversation memory cleared.", border_style="yellow"))
+
+        elif user_text == "/evaluate":
+            evaluate_answer()
+
+        elif user_text == "/exit":
+            save_memory(messages)
+            console.print(Panel("Conversation saved. Goodbye.", border_style="green"))
+            break
+
+        else:
+            messages = chat_with_claude(messages, user_text)
+
+
+if __name__ == "__main__":
+    main()
         
